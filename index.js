@@ -40,7 +40,7 @@ async function run() {
             const cars = await carsCollection.find(query).toArray();
             res.send(cars);
         });
-        // 🔹 Get Selected Cars or Cars by Email
+        // 🔹 Get Selected Cars
         app.get('/cars/:id', async (req, res) => {
             const id = req.params.id;
             const cars = await carsCollection.findOne({ _id: new ObjectId(id) });
