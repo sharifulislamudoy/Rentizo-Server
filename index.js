@@ -31,6 +31,21 @@ async function run() {
         // Send a ping to confirm a successful connection
         const database = client.db("rentizoDB");
         const carsCollection = database.collection("cars");
+        const bookingsCollection = database.collection("bookings");
+
+        // 🔹 Get Bookings by User Email
+        app.get('/bookings', async (req, res) => {
+            try {
+                const email = req.query.email;
+                let query = {};
+                if (email) query.userEmail = email;  // <-- change here
+                const bookings = await bookingsCollection.find(query).toArray();
+                res.send(bookings);
+            } catch (error) {
+                res.status(500).send({ error: 'Failed to fetch bookings' });
+            }
+        });
+
 
         // 🔹 Get All Cars or Cars by Email
         app.get('/cars', async (req, res) => {
@@ -48,6 +63,17 @@ async function run() {
                 return res.status(404).send({ error: 'Car not found' });
             }
             res.send(cars);
+        });
+
+        // 🔹 Add New Booking
+        app.post('/bookings', async (req, res) => {
+            try {
+                const newBooking = req.body;
+                const result = await bookingsCollection.insertOne(newBooking);
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ error: 'Failed to create booking' });
+            }
         });
 
         // 🔹 Add New Car
@@ -76,7 +102,7 @@ async function run() {
         });
 
         // Increment Booking Count
-        app.patch('/cars/book/:id', async (req, res) => {
+        app.patch('/bookings/:id', async (req, res) => {
             try {
                 const id = req.params.id;
                 const result = await carsCollection.updateOne(
@@ -89,6 +115,23 @@ async function run() {
                 res.status(500).send({ error: 'Failed to increase booking count' });
             }
         });
+
+        // 🔹 Update Booking (status, etc.)
+        app.patch('/bookings/:id', async (req, res) => {
+            try {
+                const id = req.params.id;
+                const updates = req.body;
+                const result = await bookingsCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: updates }
+                );
+                res.send(result);
+            } catch (error) {
+                console.error('Update Booking Error:', error);
+                res.status(500).send({ error: 'Failed to update booking' });
+            }
+        });
+
 
 
         // 🔹 Delete Car
