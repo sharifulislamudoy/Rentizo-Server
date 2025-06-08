@@ -132,6 +132,19 @@ async function run() {
             }
         });
 
+        // 🔹 Delete Booking
+        app.delete('/bookings/:id', async (req, res) => {
+            try {
+                const id = req.params.id;
+                const result = await bookingsCollection.deleteOne({ _id: new ObjectId(id) });
+                res.send(result);
+            } catch (error) {
+                console.error('Delete Booking Error:', error);
+                res.status(500).send({ error: 'Failed to delete booking' });
+            }
+        });
+
+
 
 
         // 🔹 Delete Car
