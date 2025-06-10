@@ -3,6 +3,8 @@ const cors = require('cors');
 const app = express();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 3000;
+const admin = require("firebase-admin");
+const serviceAccount = require("./rentizo-firebase-adminsdk.json");
 require('dotenv').config();
 
 app.use(cors());
@@ -21,6 +23,30 @@ const client = new MongoClient(uri, {
     }
 });
 
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
+
+const verifyFireBaseToken = async (req, res, next) => {
+    const authHeader = req.headers?.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).send({ message: 'Unauthorized Access' })
+    }
+
+    const token = authHeader.split(' ')[1];
+
+    try {
+        const decoded = await admin.auth().verifyIdToken(token);
+        req.decoded = decoded;
+        next();
+    }
+    catch (error) {
+        return res.status(401).send({ message: 'Unauthorized Access' })
+    }
+}
+
+
 async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
@@ -33,10 +59,24 @@ async function run() {
         const carsCollection = database.collection("cars");
         const bookingsCollection = database.collection("bookings");
 
+
+        // 🔹 Get All Cars
+        app.get('/cars', async (req, res) => {
+            try {
+                const cars = await carsCollection.find({}).toArray();
+                res.send(cars);
+            } catch (error) {
+                res.status(500).send({ message: 'Error retrieving cars', error });
+            }
+        });
+
         // 🔹 Get Bookings by User Email
-        app.get('/bookings', async (req, res) => {
+        app.get('/bookings', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.query.email;
+                if (email !== req.decoded.email) {
+                    return res.status(403).send({ message: 'Forbidden Access' })
+                }
                 let query = {};
                 if (email) query.userEmail = email;  // <-- change here
                 const bookings = await bookingsCollection.find(query).toArray();
@@ -47,14 +87,27 @@ async function run() {
         });
 
 
-        // 🔹 Get All Cars or Cars by Email
-        app.get('/cars', async (req, res) => {
+        // 🔹 Get Cars by Email
+        app.get('/cars/by-email', verifyFireBaseToken, async (req, res) => {
             const email = req.query.email;
-            let query = {};
-            if (email) query['addedBy.email'] = email;
-            const cars = await carsCollection.find(query).toArray();
-            res.send(cars);
+
+            if (!email) {
+                return res.status(400).send({ message: 'Email query parameter is required' });
+            }
+
+            if (email !== req.decoded.email) {
+                return res.status(403).send({ message: 'Forbidden Access' });
+            }
+
+            try {
+                const query = { 'addedBy.email': email };
+                const cars = await carsCollection.find(query).toArray();
+                res.send(cars);
+            } catch (error) {
+                res.status(500).send({ message: 'Error retrieving cars by email', error: error.message });
+            }
         });
+
         // 🔹 Get Selected Cars
         app.get('/cars/:id', async (req, res) => {
             const id = req.params.id;
