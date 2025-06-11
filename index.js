@@ -66,7 +66,7 @@ async function run() {
                 secure: process.env.NODE_ENV === 'production',
             })
 
-            res.send({ success: true,message: 'Login successfully' });
+            res.send({ success: true, message: 'Login successfully' });
         });
 
         app.post('/logout', (req, res) => {
@@ -135,8 +135,13 @@ async function run() {
         });
 
         // 🔹 Add New Booking
-        app.post('/bookings', async (req, res) => {
+        app.post('/bookings', verifyFireBaseToken, async (req, res) => {
             try {
+                const email = req.query.email;
+
+                if (email !== req.decoded.email) {
+                    return res.status(403).send({ message: 'Forbidden Access' })
+                }
                 const newBooking = req.body;
                 const result = await bookingsCollection.insertOne(newBooking);
                 res.send(result);
@@ -146,15 +151,25 @@ async function run() {
         });
 
         // 🔹 Add New Car
-        app.post('/cars', async (req, res) => {
+        app.post('/cars', verifyFireBaseToken, async (req, res) => {
+            const email = req.query.email;
+
+            if (email !== req.decoded.email) {
+                return res.status(403).send({ message: 'Forbidden Access' })
+            }
             const newCar = req.body;
             const result = await carsCollection.insertOne(newCar);
             res.send(result);
         });
 
         // 🔹 Update Car
-        app.patch('/cars/:id', async (req, res) => {
+        app.patch('/cars/:id', verifyFireBaseToken, async (req, res) => {
             try {
+                const email = req.query.email;
+
+                if (email !== req.decoded.email) {
+                    return res.status(403).send({ message: 'Forbidden Access' })
+                }
                 const id = req.params.id;
                 const updatedCar = req.body;
 
@@ -186,8 +201,13 @@ async function run() {
         });
 
         // 🔹 Update Booking (status, etc.)
-        app.patch('/bookings/:id', async (req, res) => {
+        app.patch('/bookings/:id', verifyFireBaseToken, async (req, res) => {
             try {
+                const email = req.query.email;
+
+                if (email !== req.decoded.email) {
+                    return res.status(403).send({ message: 'Forbidden Access' })
+                }
                 const id = req.params.id;
                 const updates = req.body;
                 const result = await bookingsCollection.updateOne(
@@ -202,8 +222,13 @@ async function run() {
         });
 
         // 🔹 Delete Booking
-        app.delete('/bookings/:id', async (req, res) => {
+        app.delete('/bookings/:id', verifyFireBaseToken, async (req, res) => {
             try {
+                const email = req.query.email;
+
+                if (email !== req.decoded.email) {
+                    return res.status(403).send({ message: 'Forbidden Access' })
+                }
                 const id = req.params.id;
                 const result = await bookingsCollection.deleteOne({ _id: new ObjectId(id) });
                 res.send(result);
@@ -217,7 +242,12 @@ async function run() {
 
 
         // 🔹 Delete Car
-        app.delete('/cars/:id', async (req, res) => {
+        app.delete('/cars/:id', verifyFireBaseToken, async (req, res) => {
+            const email = req.query.email;
+
+            if (email !== req.decoded.email) {
+                return res.status(403).send({ message: 'Forbidden Access' })
+            }
             const id = req.params.id;
             const result = await carsCollection.deleteOne({ _id: new ObjectId(id) });
             res.send(result);
