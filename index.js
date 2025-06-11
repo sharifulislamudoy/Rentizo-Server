@@ -155,7 +155,7 @@ async function run() {
         });
 
         // Increment Booking Count
-        app.patch('/bookings/:id', async (req, res) => {
+        app.patch('/bookings/:id/increment', async (req, res) => {
             try {
                 const id = req.params.id;
                 const result = await carsCollection.updateOne(
