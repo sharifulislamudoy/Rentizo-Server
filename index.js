@@ -1,14 +1,18 @@
 const express = require('express');
 const cors = require('cors');
 const app = express();
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser')
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 3000;
-const admin = require("firebase-admin");
-const serviceAccount = require("./rentizo-firebase-adminsdk.json");
 require('dotenv').config();
 
-app.use(cors());
+app.use(cors({
+    origin: ['http://localhost:5173'],
+    credentials: true,
+}));
 app.use(express.json());
+app.use(cookieParser());
 
 
 
@@ -23,27 +27,21 @@ const client = new MongoClient(uri, {
     }
 });
 
-admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-});
-
 const verifyFireBaseToken = async (req, res, next) => {
-    const authHeader = req.headers?.authorization;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const token = req?.cookies?.token;
+
+    if (!token) {
         return res.status(401).send({ message: 'Unauthorized Access' })
     }
 
-    const token = authHeader.split(' ')[1];
-
-    try {
-        const decoded = await admin.auth().verifyIdToken(token);
+    jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(401).send({ message: 'Unauthorized Access' })
+        }
         req.decoded = decoded;
         next();
-    }
-    catch (error) {
-        return res.status(401).send({ message: 'Unauthorized Access' })
-    }
+    })
 }
 
 
@@ -58,6 +56,28 @@ async function run() {
         const database = client.db("rentizoDB");
         const carsCollection = database.collection("cars");
         const bookingsCollection = database.collection("bookings");
+
+        app.post('/jwt', async (req, res) => {
+            const userData = req.body;
+            const token = jwt.sign(userData, process.env.JWT_SECRET, { expiresIn: '1d' })
+
+            res.cookie('token', token, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+            })
+
+            res.send({ success: true,message: 'Login successfully' });
+        });
+
+        app.post('/logout', (req, res) => {
+            res.clearCookie('token', {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'strict',
+            });
+            res.send({ success: true, message: 'Logged out successfully' });
+        });
+
 
 
         // 🔹 Get All Cars
@@ -91,12 +111,8 @@ async function run() {
         app.get('/cars/by-email', verifyFireBaseToken, async (req, res) => {
             const email = req.query.email;
 
-            if (!email) {
-                return res.status(400).send({ message: 'Email query parameter is required' });
-            }
-
             if (email !== req.decoded.email) {
-                return res.status(403).send({ message: 'Forbidden Access' });
+                return res.status(403).send({ message: 'Forbidden Access' })
             }
 
             try {
