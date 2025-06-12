@@ -2,23 +2,30 @@ const express = require('express');
 const cors = require('cors');
 const app = express();
 const jwt = require('jsonwebtoken');
-const cookieParser = require('cookie-parser')
+const cookieParser = require('cookie-parser');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 3000;
 require('dotenv').config();
 
-app.use(cors({
-    origin: ['http://localhost:5173'],
-    credentials: true,
-}));
+// Middleware Setup
+app.use(
+    cors({
+        origin: [
+            "http://localhost:5173",
+            "https://career-portal-ph.web.app",
+            "https://career-portal-ph.firebaseapp.com",
+            "https://rentizo.web.app",
+        ],
+        credentials: true,
+    })
+);
 app.use(express.json());
 app.use(cookieParser());
 
-
-
+// MongoDB connection URI using environment variables
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.jcakfyu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
+// MongoDB client setup
 const client = new MongoClient(uri, {
     serverApi: {
         version: ServerApiVersion.v1,
@@ -27,60 +34,49 @@ const client = new MongoClient(uri, {
     }
 });
 
+// JWT verification middleware
 const verifyFireBaseToken = async (req, res, next) => {
-
     const token = req?.cookies?.token;
-
     if (!token) {
-        return res.status(401).send({ message: 'Unauthorized Access' })
+        return res.status(401).send({ message: 'Unauthorized Access' });
     }
 
     jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
         if (err) {
-            return res.status(401).send({ message: 'Unauthorized Access' })
+            return res.status(401).send({ message: 'Unauthorized Access' });
         }
         req.decoded = decoded;
         next();
-    })
-}
-
+    });
+};
 
 async function run() {
     try {
-        // Connect the client to the server	(optional starting in v4.7)
-
-
-
-        await client.connect();
-        // Send a ping to confirm a successful connection
         const database = client.db("rentizoDB");
         const carsCollection = database.collection("cars");
         const bookingsCollection = database.collection("bookings");
 
+        const cookieOptions = {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "none",
+        };
+
+        // Issue JWT and set it in cookie
         app.post('/jwt', async (req, res) => {
             const userData = req.body;
-            const token = jwt.sign(userData, process.env.JWT_SECRET, { expiresIn: '1d' })
-
-            res.cookie('token', token, {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-            })
-
+            const token = jwt.sign(userData, process.env.JWT_SECRET, { expiresIn: '1d' });
+            res.cookie('token', token, cookieOptions);
             res.send({ success: true, message: 'Login successfully' });
         });
 
-        app.post('/logout', (req, res) => {
-            res.clearCookie('token', {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-                sameSite: 'strict',
-            });
+        // Clear JWT cookie on logout
+        app.post('/logout', async (req, res) => {
+            res.clearCookie('token', { ...cookieOptions, maxAge: 0 });
             res.send({ success: true, message: 'Logged out successfully' });
         });
 
-
-
-        // 🔹 Get All Cars
+        // Get all cars
         app.get('/cars', async (req, res) => {
             try {
                 const cars = await carsCollection.find({}).toArray();
@@ -90,29 +86,21 @@ async function run() {
             }
         });
 
-        // 🔹 Get Bookings by User Email
-        app.get('/bookings', verifyFireBaseToken, async (req, res) => {
-            try {
-                const email = req.query.email;
-                if (email !== req.decoded.email) {
-                    return res.status(403).send({ message: 'Forbidden Access' })
-                }
-                let query = {};
-                if (email) query.userEmail = email;  // <-- change here
-                const bookings = await bookingsCollection.find(query).toArray();
-                res.send(bookings);
-            } catch (error) {
-                res.status(500).send({ error: 'Failed to fetch bookings' });
+        // Get a single car by ID
+        app.get('/cars/:id', async (req, res) => {
+            const id = req.params.id;
+            const car = await carsCollection.findOne({ _id: new ObjectId(id) });
+            if (!car) {
+                return res.status(404).send({ error: 'Car not found' });
             }
+            res.send(car);
         });
 
-
-        // 🔹 Get Cars by Email
+        // Get cars added by a specific user
         app.get('/cars/by-email', verifyFireBaseToken, async (req, res) => {
             const email = req.query.email;
-
             if (email !== req.decoded.email) {
-                return res.status(403).send({ message: 'Forbidden Access' })
+                return res.status(403).send({ message: 'Forbidden Access' });
             }
 
             try {
@@ -124,24 +112,74 @@ async function run() {
             }
         });
 
-        // 🔹 Get Selected Cars
-        app.get('/cars/:id', async (req, res) => {
-            const id = req.params.id;
-            const cars = await carsCollection.findOne({ _id: new ObjectId(id) });
-            if (!cars) {
-                return res.status(404).send({ error: 'Car not found' });
+        // Add a new car
+        app.post('/cars', verifyFireBaseToken, async (req, res) => {
+            const email = req.query.email;
+            if (email !== req.decoded.email) {
+                return res.status(403).send({ message: 'Forbidden Access' });
             }
-            res.send(cars);
+
+            const newCar = req.body;
+            const result = await carsCollection.insertOne(newCar);
+            res.send(result);
         });
 
-        // 🔹 Add New Booking
+        // Update a car's details
+        app.patch('/cars/:id', verifyFireBaseToken, async (req, res) => {
+            try {
+                const email = req.query.email;
+                if (email !== req.decoded.email) {
+                    return res.status(403).send({ message: 'Forbidden Access' });
+                }
+
+                const id = req.params.id;
+                const updatedCar = req.body;
+                const result = await carsCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: updatedCar }
+                );
+                res.send(result);
+            } catch (err) {
+                res.status(500).send({ error: 'Failed to update car' });
+            }
+        });
+
+        // Delete a car
+        app.delete('/cars/:id', verifyFireBaseToken, async (req, res) => {
+            const email = req.query.email;
+            if (email !== req.decoded.email) {
+                return res.status(403).send({ message: 'Forbidden Access' });
+            }
+
+            const id = req.params.id;
+            const result = await carsCollection.deleteOne({ _id: new ObjectId(id) });
+            res.send(result);
+        });
+
+        // Get all bookings by user email
+        app.get('/bookings', verifyFireBaseToken, async (req, res) => {
+            try {
+                const email = req.query.email;
+                if (email !== req.decoded.email) {
+                    return res.status(403).send({ message: 'Forbidden Access' });
+                }
+
+                const query = { userEmail: email };
+                const bookings = await bookingsCollection.find(query).toArray();
+                res.send(bookings);
+            } catch (error) {
+                res.status(500).send({ error: 'Failed to fetch bookings' });
+            }
+        });
+
+        // Add a new booking
         app.post('/bookings', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.query.email;
-
                 if (email !== req.decoded.email) {
-                    return res.status(403).send({ message: 'Forbidden Access' })
+                    return res.status(403).send({ message: 'Forbidden Access' });
                 }
+
                 const newBooking = req.body;
                 const result = await bookingsCollection.insertOne(newBooking);
                 res.send(result);
@@ -150,42 +188,43 @@ async function run() {
             }
         });
 
-        // 🔹 Add New Car
-        app.post('/cars', verifyFireBaseToken, async (req, res) => {
-            const email = req.query.email;
-
-            if (email !== req.decoded.email) {
-                return res.status(403).send({ message: 'Forbidden Access' })
-            }
-            const newCar = req.body;
-            const result = await carsCollection.insertOne(newCar);
-            res.send(result);
-        });
-
-        // 🔹 Update Car
-        app.patch('/cars/:id', verifyFireBaseToken, async (req, res) => {
+        // Update a booking (e.g., status change)
+        app.patch('/bookings/:id', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.query.email;
-
                 if (email !== req.decoded.email) {
-                    return res.status(403).send({ message: 'Forbidden Access' })
+                    return res.status(403).send({ message: 'Forbidden Access' });
                 }
+
                 const id = req.params.id;
-                const updatedCar = req.body;
-
-                const result = await carsCollection.updateOne(
+                const updates = req.body;
+                const result = await bookingsCollection.updateOne(
                     { _id: new ObjectId(id) },
-                    { $set: updatedCar }
+                    { $set: updates }
                 );
-
                 res.send(result);
-            } catch (err) {
-                console.error('Update Error:', err);
-                res.status(500).send({ error: 'Failed to update car' });
+            } catch (error) {
+                res.status(500).send({ error: 'Failed to update booking' });
             }
         });
 
-        // Increment Booking Count
+        // Delete a booking
+        app.delete('/bookings/:id', verifyFireBaseToken, async (req, res) => {
+            try {
+                const email = req.query.email;
+                if (email !== req.decoded.email) {
+                    return res.status(403).send({ message: 'Forbidden Access' });
+                }
+
+                const id = req.params.id;
+                const result = await bookingsCollection.deleteOne({ _id: new ObjectId(id) });
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ error: 'Failed to delete booking' });
+            }
+        });
+
+        // Increment booking count for a car (e.g., after a booking)
         app.patch('/bookings/:id/increment', async (req, res) => {
             try {
                 const id = req.params.id;
@@ -195,77 +234,21 @@ async function run() {
                 );
                 res.send(result);
             } catch (error) {
-                console.error('Booking Error:', error);
                 res.status(500).send({ error: 'Failed to increase booking count' });
             }
         });
-
-        // 🔹 Update Booking (status, etc.)
-        app.patch('/bookings/:id', verifyFireBaseToken, async (req, res) => {
-            try {
-                const email = req.query.email;
-
-                if (email !== req.decoded.email) {
-                    return res.status(403).send({ message: 'Forbidden Access' })
-                }
-                const id = req.params.id;
-                const updates = req.body;
-                const result = await bookingsCollection.updateOne(
-                    { _id: new ObjectId(id) },
-                    { $set: updates }
-                );
-                res.send(result);
-            } catch (error) {
-                console.error('Update Booking Error:', error);
-                res.status(500).send({ error: 'Failed to update booking' });
-            }
-        });
-
-        // 🔹 Delete Booking
-        app.delete('/bookings/:id', verifyFireBaseToken, async (req, res) => {
-            try {
-                const email = req.query.email;
-
-                if (email !== req.decoded.email) {
-                    return res.status(403).send({ message: 'Forbidden Access' })
-                }
-                const id = req.params.id;
-                const result = await bookingsCollection.deleteOne({ _id: new ObjectId(id) });
-                res.send(result);
-            } catch (error) {
-                console.error('Delete Booking Error:', error);
-                res.status(500).send({ error: 'Failed to delete booking' });
-            }
-        });
-
-
-
-
-        // 🔹 Delete Car
-        app.delete('/cars/:id', verifyFireBaseToken, async (req, res) => {
-            const email = req.query.email;
-
-            if (email !== req.decoded.email) {
-                return res.status(403).send({ message: 'Forbidden Access' })
-            }
-            const id = req.params.id;
-            const result = await carsCollection.deleteOne({ _id: new ObjectId(id) });
-            res.send(result);
-        });
-        await client.db("admin").command({ ping: 1 });
-        console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
-        // Ensures that the client will close when you finish/error
-        // await client.close();
+        // MongoDB client will stay connected while the server is running
     }
 }
 run().catch(console.dir);
 
-
+// Basic health check route
 app.get('/', (req, res) => {
-    res.send('Hello World')
+    res.send('Hello World');
 });
 
+// Start the server
 app.listen(port, () => {
-    console.log(`Server is running on ${port}`)
-})
+    console.log(`Server is running on port ${port}`);
+});
