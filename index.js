@@ -12,8 +12,6 @@ app.use(
     cors({
         origin: [
             "http://localhost:5173",
-            "https://career-portal-ph.web.app",
-            "https://career-portal-ph.firebaseapp.com",
             "https://rentizo.web.app",
         ],
         credentials: true,
@@ -37,6 +35,7 @@ const client = new MongoClient(uri, {
 // JWT verification middleware
 const verifyFireBaseToken = async (req, res, next) => {
     const token = req?.cookies?.token;
+    console.log(token)
     if (!token) {
         return res.status(401).send({ message: 'Unauthorized Access' });
     }
@@ -86,18 +85,9 @@ async function run() {
             }
         });
 
-        // Get a single car by ID
-        app.get('/cars/:id', async (req, res) => {
-            const id = req.params.id;
-            const car = await carsCollection.findOne({ _id: new ObjectId(id) });
-            if (!car) {
-                return res.status(404).send({ error: 'Car not found' });
-            }
-            res.send(car);
-        });
 
         // Get cars added by a specific user
-        app.get('/cars/by-email', verifyFireBaseToken, async (req, res) => {
+        app.get('/cars/by-email',verifyFireBaseToken, async (req, res) => {
             const email = req.query.email;
             if (email !== req.decoded.email) {
                 return res.status(403).send({ message: 'Forbidden Access' });
@@ -110,6 +100,19 @@ async function run() {
             } catch (error) {
                 res.status(500).send({ message: 'Error retrieving cars by email', error: error.message });
             }
+        });
+
+        // Get a single car by ID
+        app.get('/cars/:id', async (req, res) => {
+            const id = req.params.id;
+            if (!ObjectId.isValid(id)) {
+                return res.status(400).send({ error: 'Invalid Car ID format' });
+            }
+            const car = await carsCollection.findOne({ _id: new ObjectId(id) });
+            if (!car) {
+                return res.status(404).send({ error: 'Car not found' });
+            }
+            res.send(car);
         });
 
         // Add a new car
@@ -125,7 +128,7 @@ async function run() {
         });
 
         // Update a car's details
-        app.patch('/cars/:id', verifyFireBaseToken, async (req, res) => {
+        app.patch('/cars/:id',verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.query.email;
                 if (email !== req.decoded.email) {
@@ -145,7 +148,7 @@ async function run() {
         });
 
         // Delete a car
-        app.delete('/cars/:id', verifyFireBaseToken, async (req, res) => {
+        app.delete('/cars/:id',verifyFireBaseToken, async (req, res) => {
             const email = req.query.email;
             if (email !== req.decoded.email) {
                 return res.status(403).send({ message: 'Forbidden Access' });
