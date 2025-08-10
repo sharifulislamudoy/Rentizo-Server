@@ -54,6 +54,8 @@ async function run() {
         const database = client.db("rentizoDB");
         const carsCollection = database.collection("cars");
         const bookingsCollection = database.collection("bookings");
+        const usersCollection = database.collection("users");
+
 
         const cookieOptions = {
             httpOnly: true,
@@ -61,13 +63,25 @@ async function run() {
             sameSite: "none",
         };
 
-        // Issue JWT and set it in cookie
         app.post('/jwt', async (req, res) => {
-            const userData = req.body;
+            const userData = req.body; // { name, email }
+
+            // Store user if not exists
+            const existingUser = await usersCollection.findOne({ email: userData.email });
+            if (!existingUser) {
+                await usersCollection.insertOne({
+                    name: userData.name,
+                    email: userData.email,
+                    role: 'user',
+                    createdAt: new Date()
+                });
+            }
+
             const token = jwt.sign(userData, process.env.JWT_SECRET, { expiresIn: '1d' });
             res.cookie('token', token, cookieOptions);
             res.send({ success: true, message: 'Login successfully' });
         });
+
 
         // Clear JWT cookie on logout
         app.post('/logout', async (req, res) => {
@@ -87,7 +101,7 @@ async function run() {
 
 
         // Get cars added by a specific user
-        app.get('/cars/by-email',verifyFireBaseToken, async (req, res) => {
+        app.get('/cars/by-email', verifyFireBaseToken, async (req, res) => {
             const email = req.query.email;
             if (email !== req.decoded.email) {
                 return res.status(403).send({ message: 'Forbidden Access' });
@@ -115,6 +129,29 @@ async function run() {
             res.send(car);
         });
 
+        app.get('/users', async (req, res) => {
+            try {
+                const users = await usersCollection.find({}).toArray();
+                res.send(users);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to fetch users', error: error.message });
+            }
+        });
+
+        app.get('/users/:email', async (req, res) => {
+            try {
+                const email = req.params.email;
+                const user = await usersCollection.findOne({ email });
+                if (!user) {
+                    return res.status(404).send({ message: 'User not found' });
+                }
+                res.send(user);
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to fetch user', error: error.message });
+            }
+        });
+
+
         // Add a new car
         app.post('/cars', verifyFireBaseToken, async (req, res) => {
             const email = req.query.email;
@@ -127,8 +164,38 @@ async function run() {
             res.send(result);
         });
 
+        // Create a new user
+        app.post('/users', async (req, res) => {
+            try {
+                const { name, email } = req.body;
+
+                if (!name || !email) {
+                    return res.status(400).send({ message: 'Name and email are required' });
+                }
+
+                // Check if user already exists
+                const existingUser = await usersCollection.findOne({ email });
+                if (existingUser) {
+                    return res.send({ message: 'User already exists', user: existingUser });
+                }
+
+                const newUser = {
+                    name,
+                    email,
+                    role: 'user', // Default role
+                    createdAt: new Date()
+                };
+
+                const result = await usersCollection.insertOne(newUser);
+                res.send({ success: true, message: 'User created successfully', result });
+            } catch (error) {
+                res.status(500).send({ message: 'Failed to create user', error: error.message });
+            }
+        });
+
+
         // Update a car's details
-        app.patch('/cars/:id',verifyFireBaseToken, async (req, res) => {
+        app.patch('/cars/:id', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.query.email;
                 if (email !== req.decoded.email) {
@@ -148,7 +215,7 @@ async function run() {
         });
 
         // Delete a car
-        app.delete('/cars/:id',verifyFireBaseToken, async (req, res) => {
+        app.delete('/cars/:id', verifyFireBaseToken, async (req, res) => {
             const email = req.query.email;
             if (email !== req.decoded.email) {
                 return res.status(403).send({ message: 'Forbidden Access' });
