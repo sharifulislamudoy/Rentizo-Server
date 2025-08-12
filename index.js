@@ -151,6 +151,34 @@ async function run() {
             }
         });
 
+        app.get('/bookings/:id', verifyFireBaseToken, async (req, res) => {
+            try {
+                const id = req.params.id;
+
+                // Validate the ID format
+                if (!ObjectId.isValid(id)) {
+                    return res.status(400).send({ error: 'Invalid booking ID format' });
+                }
+
+                const booking = await bookingsCollection.findOne({
+                    _id: new ObjectId(id)
+                });
+
+                if (!booking) {
+                    return res.status(404).send({ error: 'Booking not found' });
+                }
+
+                // Verify the requesting user owns this booking
+                if (booking.userEmail !== req.decoded.email) {
+                    return res.status(403).send({ message: 'Forbidden Access' });
+                }
+
+                res.send(booking);
+            } catch (error) {
+                console.error('Error fetching booking:', error);
+                res.status(500).send({ error: 'Failed to fetch booking details' });
+            }
+        });
 
         // Add a new car
         app.post('/cars', verifyFireBaseToken, async (req, res) => {
