@@ -4,6 +4,7 @@ const app = express();
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const nodemailer = require('nodemailer');
 const port = process.env.PORT || 3000;
 const Stripe = require('stripe');
 require('dotenv').config();
@@ -24,6 +25,15 @@ app.use(cookieParser());
 // MongoDB connection URI using environment variables
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.jcakfyu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 const stripe = Stripe(process.env.Stripe_Secret_Key);
+
+// Nodemailer transporter setup
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD // Use App Password, not regular password
+    }
+});
 
 // MongoDB client setup
 const client = new MongoClient(uri, {
@@ -51,13 +61,142 @@ const verifyFireBaseToken = async (req, res, next) => {
     });
 };
 
+// Contact form submission endpoint
+app.post('/api/contact', async (req, res) => {
+    try {
+        const { name, email, subject, message } = req.body;
+
+        // Validate required fields
+        if (!name || !email || !subject || !message) {
+            return res.status(400).json({
+                success: false,
+                message: 'All fields are required'
+            });
+        }
+
+        // Email content for you (admin)
+        const adminMailOptions = {
+            from: process.env.GMAIL_USER,
+            to: 'surifroton301@gmail.com', // Your Gmail address
+            subject: `New Contact Form Submission: ${subject}`,
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #333; border-bottom: 2px solid #00BFA6; padding-bottom: 10px;">
+                        New Contact Form Submission
+                    </h2>
+                    <div style="background: #f9f9f9; padding: 20px; border-radius: 8px; border-left: 4px solid #00BFA6;">
+                        <p><strong>Name:</strong> ${name}</p>
+                        <p><strong>Email:</strong> ${email}</p>
+                        <p><strong>Subject:</strong> ${subject}</p>
+                        <p><strong>Message:</strong></p>
+                        <div style="background: white; padding: 15px; border-radius: 5px; margin-top: 10px;">
+                            ${message.replace(/\n/g, '<br>')}
+                        </div>
+                    </div>
+                    <div style="margin-top: 20px; padding: 15px; background: #e8f5e8; border-radius: 5px;">
+                        <p style="margin: 0; color: #2d5016;">
+                            <strong>Sent from:</strong> Rentizo Contact Form<br>
+                            <strong>Time:</strong> ${new Date().toLocaleString()}
+                        </p>
+                    </div>
+                </div>
+            `
+        };
+
+        // Auto-reply to the user
+        const userMailOptions = {
+            from: process.env.GMAIL_USER,
+            to: email,
+            subject: 'Thank you for contacting Rentizo',
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #00BFA6; text-align: center;">Thank You for Contacting Rentizo!</h2>
+                    <div style="background: #f0f8ff; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                        <p>Dear <strong>${name}</strong>,</p>
+                        <p>Thank you for reaching out to us. We have received your message and our team will get back to you within 2 business hours.</p>
+                        
+                        <div style="background: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                            <p><strong>Your Message Details:</strong></p>
+                            <p><strong>Subject:</strong> ${subject}</p>
+                            <p><strong>Message:</strong> ${message}</p>
+                        </div>
+
+                        <p>If you have any urgent inquiries, please feel free to call us at <strong>+1 (555) 123-4567</strong>.</p>
+                        
+                        <p>Best regards,<br>
+                        <strong>The Rentizo Team</strong></p>
+                    </div>
+                    
+                    <div style="text-align: center; margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px;">
+                        <p style="margin: 0; color: #666; font-size: 12px;">
+                            Rentizo Car Rental Service<br>
+                            123 Auto Drive, Suite 100, San Francisco, CA 94107<br>
+                            Phone: +1 (555) 123-4567 | Email: support@rentizo.com
+                        </p>
+                    </div>
+                </div>
+            `
+        };
+
+        // Send both emails
+        await transporter.sendMail(adminMailOptions);
+        await transporter.sendMail(userMailOptions);
+
+        // Store contact form submission in database (optional)
+        if (client.db()) {
+            const database = client.db("rentizoDB");
+            const contactsCollection = database.collection("contactSubmissions");
+            await contactsCollection.insertOne({
+                name,
+                email,
+                subject,
+                message,
+                submittedAt: new Date(),
+                ip: req.ip
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Message sent successfully! We will get back to you soon.'
+        });
+
+    } catch (error) {
+        console.error('Error sending contact form:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to send message. Please try again later.'
+        });
+    }
+});
+
+// Get contact form submissions (admin only)
+app.get('/api/contact/submissions', verifyFireBaseToken, async (req, res) => {
+    try {
+        // Check if user is admin
+        const user = await usersCollection.findOne({ email: req.decoded.email });
+        if (user.role !== 'admin') {
+            return res.status(403).send({ message: 'Admin access required' });
+        }
+
+        const database = client.db("rentizoDB");
+        const contactsCollection = database.collection("contactSubmissions");
+        const submissions = await contactsCollection.find({}).sort({ submittedAt: -1 }).toArray();
+        
+        res.send(submissions);
+    } catch (error) {
+        console.error('Error fetching contact submissions:', error);
+        res.status(500).send({ error: 'Failed to fetch contact submissions' });
+    }
+});
+
 async function run() {
     try {
         const database = client.db("rentizoDB");
         const carsCollection = database.collection("cars");
         const bookingsCollection = database.collection("bookings");
         const usersCollection = database.collection("users");
-        const paymentsCollection = database.collection("payments"); // New collection for payments
+        const paymentsCollection = database.collection("payments");
 
         const cookieOptions = {
             httpOnly: true,
@@ -66,9 +205,8 @@ async function run() {
         };
 
         app.post('/jwt', async (req, res) => {
-            const userData = req.body; // { name, email }
+            const userData = req.body;
 
-            // Store user if not exists
             const existingUser = await usersCollection.findOne({ email: userData.email });
             if (!existingUser) {
                 await usersCollection.insertOne({
@@ -84,13 +222,11 @@ async function run() {
             res.send({ success: true, message: 'Login successfully' });
         });
 
-        // Clear JWT cookie on logout
         app.post('/logout', async (req, res) => {
             res.clearCookie('token', { ...cookieOptions, maxAge: 0 });
             res.send({ success: true, message: 'Logged out successfully' });
         });
 
-        // Get all cars
         app.get('/cars', async (req, res) => {
             try {
                 const cars = await carsCollection.find({}).toArray();
@@ -100,7 +236,6 @@ async function run() {
             }
         });
 
-        // Get cars added by a specific user
         app.get('/cars/by-email', verifyFireBaseToken, async (req, res) => {
             const email = req.query.email;
             if (email !== req.decoded.email) {
@@ -116,7 +251,6 @@ async function run() {
             }
         });
 
-        // Get a single car by ID
         app.get('/cars/:id', async (req, res) => {
             const id = req.params.id;
             if (!ObjectId.isValid(id)) {
@@ -151,7 +285,6 @@ async function run() {
             }
         });
 
-        // Update user profile
         app.patch('/users/:email', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.params.email;
@@ -202,7 +335,6 @@ async function run() {
             }
         });
 
-        // Create Payment Intent - FIXED ROUTE
         app.post('/create-payment-intent', verifyFireBaseToken, async (req, res) => {
             try {
                 const { amount, currency = 'usd', bookingId } = req.body;
@@ -211,13 +343,11 @@ async function run() {
                     return res.status(400).send({ error: 'Amount and booking ID are required' });
                 }
 
-                // Validate amount is a number
                 const amountNumber = parseInt(amount);
                 if (isNaN(amountNumber)) {
                     return res.status(400).send({ error: 'Amount must be a valid number' });
                 }
 
-                // Create a PaymentIntent with the order amount and currency
                 const paymentIntent = await stripe.paymentIntents.create({
                     amount: amountNumber,
                     currency: currency,
@@ -240,17 +370,14 @@ async function run() {
             }
         });
 
-        // Save payment data to database
         app.post('/payments', verifyFireBaseToken, async (req, res) => {
             try {
                 const paymentData = req.body;
                 
-                // Validate required fields
                 if (!paymentData.bookingId || !paymentData.paymentIntentId || !paymentData.amount) {
                     return res.status(400).send({ error: 'Missing required payment fields' });
                 }
 
-                // Check if payment already exists
                 const existingPayment = await paymentsCollection.findOne({
                     paymentIntentId: paymentData.paymentIntentId
                 });
@@ -259,7 +386,6 @@ async function run() {
                     return res.status(400).send({ error: 'Payment already processed' });
                 }
 
-                // Insert payment data
                 const result = await paymentsCollection.insertOne({
                     ...paymentData,
                     createdAt: new Date(),
@@ -277,7 +403,6 @@ async function run() {
             }
         });
 
-        // Get payments by user email
         app.get('/payments', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.query.email;
@@ -293,7 +418,6 @@ async function run() {
             }
         });
 
-        // Add a new car
         app.post('/cars', verifyFireBaseToken, async (req, res) => {
             const email = req.query.email;
             if (email !== req.decoded.email) {
@@ -305,7 +429,6 @@ async function run() {
             res.send(result);
         });
 
-        // Create a new user
         app.post('/users', async (req, res) => {
             try {
                 const { name, email } = req.body;
@@ -333,7 +456,6 @@ async function run() {
             }
         });
 
-        // Update a car's details
         app.patch('/cars/:id', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.query.email;
@@ -353,7 +475,6 @@ async function run() {
             }
         });
 
-        // Delete a car
         app.delete('/cars/:id', verifyFireBaseToken, async (req, res) => {
             const email = req.query.email;
             if (email !== req.decoded.email) {
@@ -365,7 +486,6 @@ async function run() {
             res.send(result);
         });
 
-        // Get all bookings by user email
         app.get('/bookings', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.query.email;
@@ -381,7 +501,6 @@ async function run() {
             }
         });
 
-        // Add a new booking
         app.post('/bookings', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.query.email;
@@ -397,7 +516,6 @@ async function run() {
             }
         });
 
-        // Update a booking (e.g., status change)
         app.patch('/bookings/:id', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.query.email;
@@ -417,7 +535,6 @@ async function run() {
             }
         });
 
-        // Delete a booking
         app.delete('/bookings/:id', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.query.email;
@@ -433,7 +550,6 @@ async function run() {
             }
         });
 
-        // Increment booking count for a car (e.g., after a booking)
         app.patch('/bookings/:id/increment', async (req, res) => {
             try {
                 const id = req.params.id;
