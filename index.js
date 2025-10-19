@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const port = process.env.PORT || 3000;
+const Stripe = require('stripe');
 require('dotenv').config();
 
 // Middleware Setup
@@ -22,6 +23,7 @@ app.use(cookieParser());
 
 // MongoDB connection URI using environment variables
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASSWORD}@cluster0.jcakfyu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
+const stripe = Stripe(process.env.Stripe_Secret_Key);
 
 // MongoDB client setup
 const client = new MongoClient(uri, {
@@ -55,6 +57,7 @@ async function run() {
         const carsCollection = database.collection("cars");
         const bookingsCollection = database.collection("bookings");
         const usersCollection = database.collection("users");
+        const paymentsCollection = database.collection("payments"); // New collection for payments
 
         const cookieOptions = {
             httpOnly: true,
@@ -196,6 +199,97 @@ async function run() {
             } catch (error) {
                 console.error('Error fetching booking:', error);
                 res.status(500).send({ error: 'Failed to fetch booking details' });
+            }
+        });
+
+        // Create Payment Intent - FIXED ROUTE
+        app.post('/create-payment-intent', verifyFireBaseToken, async (req, res) => {
+            try {
+                const { amount, currency = 'usd', bookingId } = req.body;
+
+                if (!amount || !bookingId) {
+                    return res.status(400).send({ error: 'Amount and booking ID are required' });
+                }
+
+                // Validate amount is a number
+                const amountNumber = parseInt(amount);
+                if (isNaN(amountNumber)) {
+                    return res.status(400).send({ error: 'Amount must be a valid number' });
+                }
+
+                // Create a PaymentIntent with the order amount and currency
+                const paymentIntent = await stripe.paymentIntents.create({
+                    amount: amountNumber,
+                    currency: currency,
+                    automatic_payment_methods: {
+                        enabled: true,
+                    },
+                    metadata: {
+                        bookingId: bookingId,
+                        userEmail: req.decoded.email,
+                    },
+                });
+
+                res.send({
+                    clientSecret: paymentIntent.client_secret,
+                    paymentIntentId: paymentIntent.id,
+                });
+            } catch (error) {
+                console.error('Error creating payment intent:', error);
+                res.status(500).send({ error: 'Failed to create payment intent: ' + error.message });
+            }
+        });
+
+        // Save payment data to database
+        app.post('/payments', verifyFireBaseToken, async (req, res) => {
+            try {
+                const paymentData = req.body;
+                
+                // Validate required fields
+                if (!paymentData.bookingId || !paymentData.paymentIntentId || !paymentData.amount) {
+                    return res.status(400).send({ error: 'Missing required payment fields' });
+                }
+
+                // Check if payment already exists
+                const existingPayment = await paymentsCollection.findOne({
+                    paymentIntentId: paymentData.paymentIntentId
+                });
+
+                if (existingPayment) {
+                    return res.status(400).send({ error: 'Payment already processed' });
+                }
+
+                // Insert payment data
+                const result = await paymentsCollection.insertOne({
+                    ...paymentData,
+                    createdAt: new Date(),
+                    status: 'completed'
+                });
+
+                res.send({
+                    success: true,
+                    message: 'Payment saved successfully',
+                    paymentId: result.insertedId
+                });
+            } catch (error) {
+                console.error('Error saving payment:', error);
+                res.status(500).send({ error: 'Failed to save payment: ' + error.message });
+            }
+        });
+
+        // Get payments by user email
+        app.get('/payments', verifyFireBaseToken, async (req, res) => {
+            try {
+                const email = req.query.email;
+                if (email !== req.decoded.email) {
+                    return res.status(403).send({ message: 'Forbidden Access' });
+                }
+
+                const payments = await paymentsCollection.find({ userEmail: email }).toArray();
+                res.send(payments);
+            } catch (error) {
+                console.error('Error fetching payments:', error);
+                res.status(500).send({ error: 'Failed to fetch payments' });
             }
         });
 
@@ -360,7 +454,7 @@ run().catch(console.dir);
 
 // Basic health check route
 app.get('/', (req, res) => {
-    res.send('Hello World');
+    res.send('Rentizo Server is running');
 });
 
 // Start the server
