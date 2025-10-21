@@ -227,6 +227,40 @@ async function run() {
             res.send({ success: true, message: 'Logged out successfully' });
         });
 
+        // New endpoint to update user role
+        app.patch('/users/:email/role', verifyFireBaseToken, async (req, res) => {
+            try {
+                const email = req.params.email;
+                if (email !== req.decoded.email) {
+                    return res.status(403).send({ message: 'Forbidden Access' });
+                }
+
+                const { role } = req.body;
+                
+                // Validate role
+                if (!role || !['user', 'car-owner', 'admin'].includes(role)) {
+                    return res.status(400).send({ message: 'Invalid role specified' });
+                }
+
+                const result = await usersCollection.updateOne(
+                    { email },
+                    { $set: { role: role, updatedAt: new Date() } }
+                );
+
+                if (result.matchedCount === 0) {
+                    return res.status(404).send({ message: 'User not found' });
+                }
+
+                res.send({ 
+                    success: true, 
+                    message: `Role updated to ${role} successfully` 
+                });
+            } catch (error) {
+                console.error('Error updating user role:', error);
+                res.status(500).send({ message: 'Failed to update user role', error: error.message });
+            }
+        });
+
         app.get('/cars', async (req, res) => {
             try {
                 const cars = await carsCollection.find({}).toArray();
