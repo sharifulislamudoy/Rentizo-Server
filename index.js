@@ -31,7 +31,7 @@ const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
         user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD // Use App Password, not regular password
+        pass: process.env.GMAIL_APP_PASSWORD
     }
 });
 
@@ -47,7 +47,6 @@ const client = new MongoClient(uri, {
 // JWT verification middleware
 const verifyFireBaseToken = async (req, res, next) => {
     const token = req?.cookies?.token;
-    console.log(token)
     if (!token) {
         return res.status(401).send({ message: 'Unauthorized Access' });
     }
@@ -61,12 +60,28 @@ const verifyFireBaseToken = async (req, res, next) => {
     });
 };
 
+// Admin verification middleware
+const verifyAdmin = async (req, res, next) => {
+    try {
+        const email = req.decoded.email;
+        const database = client.db("rentizoDB");
+        const usersCollection = database.collection("users");
+
+        const user = await usersCollection.findOne({ email });
+        if (!user || user.role !== 'admin') {
+            return res.status(403).send({ message: 'Admin access required' });
+        }
+        next();
+    } catch (error) {
+        res.status(500).send({ message: 'Error verifying admin access' });
+    }
+};
+
 // Contact form submission endpoint
 app.post('/api/contact', async (req, res) => {
     try {
         const { name, email, subject, message } = req.body;
 
-        // Validate required fields
         if (!name || !email || !subject || !message) {
             return res.status(400).json({
                 success: false,
@@ -74,10 +89,9 @@ app.post('/api/contact', async (req, res) => {
             });
         }
 
-        // Email content for you (admin)
         const adminMailOptions = {
             from: process.env.GMAIL_USER,
-            to: 'surifroton301@gmail.com', // Your Gmail address
+            to: 'surifroton301@gmail.com',
             subject: `New Contact Form Submission: ${subject}`,
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -93,17 +107,10 @@ app.post('/api/contact', async (req, res) => {
                             ${message.replace(/\n/g, '<br>')}
                         </div>
                     </div>
-                    <div style="margin-top: 20px; padding: 15px; background: #e8f5e8; border-radius: 5px;">
-                        <p style="margin: 0; color: #2d5016;">
-                            <strong>Sent from:</strong> Rentizo Contact Form<br>
-                            <strong>Time:</strong> ${new Date().toLocaleString()}
-                        </p>
-                    </div>
                 </div>
             `
         };
 
-        // Auto-reply to the user
         const userMailOptions = {
             from: process.env.GMAIL_USER,
             to: email,
@@ -114,35 +121,15 @@ app.post('/api/contact', async (req, res) => {
                     <div style="background: #f0f8ff; padding: 20px; border-radius: 8px; margin: 20px 0;">
                         <p>Dear <strong>${name}</strong>,</p>
                         <p>Thank you for reaching out to us. We have received your message and our team will get back to you within 2 business hours.</p>
-                        
-                        <div style="background: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
-                            <p><strong>Your Message Details:</strong></p>
-                            <p><strong>Subject:</strong> ${subject}</p>
-                            <p><strong>Message:</strong> ${message}</p>
-                        </div>
-
-                        <p>If you have any urgent inquiries, please feel free to call us at <strong>+1 (555) 123-4567</strong>.</p>
-                        
-                        <p>Best regards,<br>
-                        <strong>The Rentizo Team</strong></p>
-                    </div>
-                    
-                    <div style="text-align: center; margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px;">
-                        <p style="margin: 0; color: #666; font-size: 12px;">
-                            Rentizo Car Rental Service<br>
-                            123 Auto Drive, Suite 100, San Francisco, CA 94107<br>
-                            Phone: +1 (555) 123-4567 | Email: support@rentizo.com
-                        </p>
+                        <p>Best regards,<br><strong>The Rentizo Team</strong></p>
                     </div>
                 </div>
             `
         };
 
-        // Send both emails
         await transporter.sendMail(adminMailOptions);
         await transporter.sendMail(userMailOptions);
 
-        // Store contact form submission in database (optional)
         if (client.db()) {
             const database = client.db("rentizoDB");
             const contactsCollection = database.collection("contactSubmissions");
@@ -170,23 +157,197 @@ app.post('/api/contact', async (req, res) => {
     }
 });
 
-// Get contact form submissions (admin only)
-app.get('/api/contact/submissions', verifyFireBaseToken, async (req, res) => {
+// ==================== ADMIN SPECIFIC ENDPOINTS ====================
+
+// Get all users (Admin only)
+app.get('/admin/users', verifyFireBaseToken, verifyAdmin, async (req, res) => {
     try {
-        // Check if user is admin
-        const user = await usersCollection.findOne({ email: req.decoded.email });
-        if (user.role !== 'admin') {
-            return res.status(403).send({ message: 'Admin access required' });
+        const database = client.db("rentizoDB");
+        const usersCollection = database.collection("users");
+
+        const users = await usersCollection.find({}).toArray();
+        res.send(users);
+    } catch (error) {
+        console.error('Error fetching users:', error);
+        res.status(500).send({ message: 'Failed to fetch users', error: error.message });
+    }
+});
+
+// Update user role (Admin only)
+app.patch('/admin/users/:id/role', verifyFireBaseToken, verifyAdmin, async (req, res) => {
+    try {
+        const userId = req.params.id;
+        const { role } = req.body;
+
+        if (!role || !['user', 'car-owner', 'admin'].includes(role)) {
+            return res.status(400).send({ message: 'Invalid role specified' });
         }
 
         const database = client.db("rentizoDB");
-        const contactsCollection = database.collection("contactSubmissions");
-        const submissions = await contactsCollection.find({}).sort({ submittedAt: -1 }).toArray();
-        
-        res.send(submissions);
+        const usersCollection = database.collection("users");
+
+        const result = await usersCollection.updateOne(
+            { _id: new ObjectId(userId) },
+            {
+                $set: {
+                    role: role,
+                    updatedAt: new Date()
+                }
+            }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).send({ message: 'User not found' });
+        }
+
+        res.send({
+            success: true,
+            message: `User role updated to ${role} successfully`
+        });
     } catch (error) {
-        console.error('Error fetching contact submissions:', error);
-        res.status(500).send({ error: 'Failed to fetch contact submissions' });
+        console.error('Error updating user role:', error);
+        res.status(500).send({ message: 'Failed to update user role', error: error.message });
+    }
+});
+
+
+// Get admin dashboard statistics
+app.get('/admin/stats', verifyFireBaseToken, verifyAdmin, async (req, res) => {
+    try {
+        const database = client.db("rentizoDB");
+        const usersCollection = database.collection("users");
+        const carsCollection = database.collection("cars");
+        const bookingsCollection = database.collection("bookings");
+        const paymentsCollection = database.collection("payments");
+
+        const totalUsers = await usersCollection.countDocuments();
+        const totalOwners = await usersCollection.countDocuments({ role: 'car-owner' });
+        const totalCars = await carsCollection.countDocuments();
+        const totalBookings = await bookingsCollection.countDocuments();
+
+        // Calculate total revenue from payments
+        const payments = await paymentsCollection.find({}).toArray();
+        const totalRevenue = payments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
+
+        res.send({
+            totalUsers,
+            totalOwners,
+            totalCars,
+            totalBookings,
+            totalRevenue: `$${totalRevenue.toLocaleString()}`,
+            monthlyGrowth: "+12%" // You can calculate this based on actual data
+        });
+    } catch (error) {
+        console.error('Error fetching admin stats:', error);
+        res.status(500).send({ message: 'Failed to fetch admin statistics', error: error.message });
+    }
+});
+
+// Get all cars for admin
+app.get('/admin/cars', verifyFireBaseToken, verifyAdmin, async (req, res) => {
+    try {
+        const database = client.db("rentizoDB");
+        const carsCollection = database.collection("cars");
+
+        const cars = await carsCollection.find({}).toArray();
+        res.send(cars);
+    } catch (error) {
+        console.error('Error fetching cars for admin:', error);
+        res.status(500).send({ message: 'Failed to fetch cars', error: error.message });
+    }
+});
+
+// Update car status (Admin only)
+app.patch('/admin/cars/:id/status', verifyFireBaseToken, verifyAdmin, async (req, res) => {
+    try {
+        const carId = req.params.id;
+        const { status } = req.body;
+
+        if (!status || !['pending', 'approved', 'rejected'].includes(status)) {
+            return res.status(400).send({ message: 'Invalid status specified' });
+        }
+
+        const database = client.db("rentizoDB");
+        const carsCollection = database.collection("cars");
+
+        const result = await carsCollection.updateOne(
+            { _id: new ObjectId(carId) },
+            {
+                $set: {
+                    status: status,
+                    updatedAt: new Date()
+                }
+            }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).send({ message: 'Car not found' });
+        }
+
+        res.send({
+            success: true,
+            message: `Car status updated to ${status} successfully`
+        });
+    } catch (error) {
+        console.error('Error updating car status:', error);
+        res.status(500).send({ message: 'Failed to update car status', error: error.message });
+    }
+});
+
+// Get all bookings for admin
+app.get('/admin/bookings', verifyFireBaseToken, verifyAdmin, async (req, res) => {
+    try {
+        const database = client.db("rentizoDB");
+        const bookingsCollection = database.collection("bookings");
+
+        const bookings = await bookingsCollection.find({}).toArray();
+        res.send(bookings);
+    } catch (error) {
+        console.error('Error fetching bookings for admin:', error);
+        res.status(500).send({ message: 'Failed to fetch bookings', error: error.message });
+    }
+});
+
+// Delete user (Admin only)
+app.delete('/admin/users/:id', verifyFireBaseToken, verifyAdmin, async (req, res) => {
+    try {
+        const userId = req.params.id;
+
+        const database = client.db("rentizoDB");
+        const usersCollection = database.collection("users");
+        const carsCollection = database.collection("cars");
+        const bookingsCollection = database.collection("bookings");
+        const paymentsCollection = database.collection("payments");
+
+        // First, check if user exists
+        const user = await usersCollection.findOne({ _id: new ObjectId(userId) });
+        if (!user) {
+            return res.status(404).send({ message: 'User not found' });
+        }
+
+        // Delete user's cars
+        await carsCollection.deleteMany({ 'addedBy.email': user.email });
+
+        // Delete user's bookings
+        await bookingsCollection.deleteMany({ userEmail: user.email });
+
+        // Delete user's payments
+        await paymentsCollection.deleteMany({ userEmail: user.email });
+
+        // Finally, delete the user
+        const result = await usersCollection.deleteOne({ _id: new ObjectId(userId) });
+
+        if (result.deletedCount === 0) {
+            return res.status(404).send({ message: 'User not found' });
+        }
+
+        res.send({
+            success: true,
+            message: 'User and all associated data deleted successfully'
+        });
+    } catch (error) {
+        console.error('Error deleting user:', error);
+        res.status(500).send({ message: 'Failed to delete user', error: error.message });
     }
 });
 
@@ -213,6 +374,7 @@ async function run() {
                     name: userData.name,
                     email: userData.email,
                     role: 'user',
+                    status: 'active',
                     createdAt: new Date()
                 });
             }
@@ -227,7 +389,7 @@ async function run() {
             res.send({ success: true, message: 'Logged out successfully' });
         });
 
-        // New endpoint to update user role
+        // Update user role (for users to update their own role)
         app.patch('/users/:email/role', verifyFireBaseToken, async (req, res) => {
             try {
                 const email = req.params.email;
@@ -236,8 +398,7 @@ async function run() {
                 }
 
                 const { role } = req.body;
-                
-                // Validate role
+
                 if (!role || !['user', 'car-owner', 'admin'].includes(role)) {
                     return res.status(400).send({ message: 'Invalid role specified' });
                 }
@@ -251,9 +412,9 @@ async function run() {
                     return res.status(404).send({ message: 'User not found' });
                 }
 
-                res.send({ 
-                    success: true, 
-                    message: `Role updated to ${role} successfully` 
+                res.send({
+                    success: true,
+                    message: `Role updated to ${role} successfully`
                 });
             } catch (error) {
                 console.error('Error updating user role:', error);
@@ -407,7 +568,7 @@ async function run() {
         app.post('/payments', verifyFireBaseToken, async (req, res) => {
             try {
                 const paymentData = req.body;
-                
+
                 if (!paymentData.bookingId || !paymentData.paymentIntentId || !paymentData.amount) {
                     return res.status(400).send({ error: 'Missing required payment fields' });
                 }
@@ -480,6 +641,7 @@ async function run() {
                     name,
                     email,
                     role: 'user',
+                    status: 'active',
                     createdAt: new Date()
                 };
 
