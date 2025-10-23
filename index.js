@@ -350,6 +350,188 @@ app.delete('/admin/users/:id', verifyFireBaseToken, verifyAdmin, async (req, res
         res.status(500).send({ message: 'Failed to delete user', error: error.message });
     }
 });
+// Get comprehensive analytics data
+app.get('/admin/analytics', verifyFireBaseToken, verifyAdmin, async (req, res) => {
+    try {
+        const database = client.db("rentizoDB");
+        const usersCollection = database.collection("users");
+        const carsCollection = database.collection("cars");
+        const bookingsCollection = database.collection("bookings");
+        const paymentsCollection = database.collection("payments");
+
+        // Basic counts
+        const totalUsers = await usersCollection.countDocuments();
+        const totalOwners = await usersCollection.countDocuments({ role: 'car-owner' });
+        const totalCars = await carsCollection.countDocuments();
+        const totalBookings = await bookingsCollection.countDocuments();
+
+        // Revenue calculations
+        const payments = await paymentsCollection.find({}).toArray();
+        const totalRevenue = payments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
+
+        // Monthly revenue (current month)
+        const currentMonth = new Date().getMonth();
+        const currentYear = new Date().getFullYear();
+        const monthlyPayments = payments.filter(payment => {
+            const paymentDate = new Date(payment.createdAt);
+            return paymentDate.getMonth() === currentMonth && paymentDate.getFullYear() === currentYear;
+        });
+        const monthlyRevenue = monthlyPayments.reduce((sum, payment) => sum + (payment.amount || 0), 0);
+
+        // Pending payments
+        const pendingPaymentsData = await paymentsCollection.find({ status: 'pending' }).toArray();
+        const pendingPayments = pendingPaymentsData.reduce((sum, payment) => sum + (payment.amount || 0), 0);
+
+        // User distribution
+        const userDistribution = [
+            { name: 'Regular Users', value: totalUsers - totalOwners },
+            { name: 'Car Owners', value: totalOwners }
+        ];
+
+        // Car status distribution
+        const approvedCars = await carsCollection.countDocuments({ status: 'approved' });
+        const pendingCars = await carsCollection.countDocuments({ status: 'pending' });
+        const rejectedCars = await carsCollection.countDocuments({ status: 'rejected' });
+
+        const carStatusData = [
+            { status: 'Approved', count: approvedCars },
+            { status: 'Pending', count: pendingCars },
+            { status: 'Rejected', count: rejectedCars }
+        ];
+
+        // Active bookings
+        const activeBookings = await bookingsCollection.countDocuments({
+            status: { $in: ['confirmed', 'active'] }
+        });
+
+        // Monthly bookings trend (last 6 months)
+        const sixMonthsAgo = new Date();
+        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+        const monthlyBookingsData = await bookingsCollection.aggregate([
+            {
+                $match: {
+                    createdAt: { $gte: sixMonthsAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        year: { $year: "$createdAt" },
+                        month: { $month: "$createdAt" }
+                    },
+                    bookings: { $sum: 1 }
+                }
+            },
+            {
+                $sort: { "_id.year": 1, "_id.month": 1 }
+            }
+        ]).toArray();
+
+        const monthlyBookings = monthlyBookingsData.map(item => ({
+            month: `${item._id.year}-${item._id.month}`,
+            bookings: item.bookings
+        }));
+
+        // Revenue trend (last 6 months)
+        const revenueTrendData = await paymentsCollection.aggregate([
+            {
+                $match: {
+                    createdAt: { $gte: sixMonthsAgo },
+                    status: 'completed'
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        year: { $year: "$createdAt" },
+                        month: { $month: "$createdAt" }
+                    },
+                    revenue: { $sum: "$amount" }
+                }
+            },
+            {
+                $sort: { "_id.year": 1, "_id.month": 1 }
+            }
+        ]).toArray();
+
+        const revenueTrend = revenueTrendData.map(item => ({
+            month: `${item._id.year}-${item._id.month}`,
+            revenue: item.revenue
+        }));
+
+        // Additional metrics
+        const availableCars = await carsCollection.countDocuments({
+            status: 'approved',
+            availability: true
+        });
+
+        // Calculate growth percentages (simplified - you can implement actual comparison with previous period)
+        const userGrowth = 12; // Example growth percentage
+        const revenueGrowth = 8; // Example growth percentage
+
+        // Calculate additional metrics
+        const avgBookingValue = totalBookings > 0 ? Math.round(totalRevenue / totalBookings) : 0;
+        const occupancyRate = totalCars > 0 ? Math.round((activeBookings / totalCars) * 100) : 0;
+
+        // Repeat customers (users with more than 1 booking)
+        const repeatCustomersData = await bookingsCollection.aggregate([
+            {
+                $group: {
+                    _id: "$userEmail",
+                    bookingCount: { $sum: 1 }
+                }
+            },
+            {
+                $match: {
+                    bookingCount: { $gt: 1 }
+                }
+            }
+        ]).toArray();
+
+        const repeatCustomers = repeatCustomersData.length;
+
+        // Cancellation rate
+        const cancelledBookings = await bookingsCollection.countDocuments({ status: 'cancelled' });
+        const cancellationRate = totalBookings > 0 ? Math.round((cancelledBookings / totalBookings) * 100) : 0;
+
+        res.send({
+            // Basic counts
+            totalUsers,
+            totalOwners,
+            totalCars,
+            totalBookings,
+
+            // Revenue metrics
+            totalRevenue: `$${totalRevenue.toLocaleString()}`,
+            monthlyRevenue: `$${monthlyRevenue.toLocaleString()}`,
+            pendingPayments: `$${pendingPayments.toLocaleString()}`,
+            pendingCount: pendingPaymentsData.length,
+
+            // Growth metrics
+            userGrowth,
+            revenueGrowth,
+            ownerPercentage: totalUsers > 0 ? Math.round((totalOwners / totalUsers) * 100) : 0,
+
+            // Additional metrics
+            activeBookings,
+            availableCars,
+            avgBookingValue: `$${avgBookingValue}`,
+            occupancyRate: `${occupancyRate}%`,
+            repeatCustomers,
+            cancellationRate: `${cancellationRate}%`,
+
+            // Chart data
+            userDistribution,
+            carStatusData,
+            monthlyBookings,
+            revenueTrend
+        });
+    } catch (error) {
+        console.error('Error fetching analytics:', error);
+        res.status(500).send({ message: 'Failed to fetch analytics data', error: error.message });
+    }
+});
 
 async function run() {
     try {
