@@ -77,6 +77,41 @@ const verifyAdmin = async (req, res, next) => {
     }
 };
 
+// 🔥 FIXED: Increment booking count endpoint
+app.patch('/cars/:id/increment', async (req, res) => {
+  try {
+    const id = req.params.id;
+    
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ error: 'Invalid car ID format' });
+    }
+
+    const database = client.db("rentizoDB");
+    const carsCollection = database.collection("cars");
+
+    const result = await carsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { 
+        $inc: { bookingCount: 1 },
+        $set: { updatedAt: new Date() }
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({ error: 'Car not found' });
+    }
+
+    res.send({ 
+      success: true, 
+      message: 'Booking count incremented successfully',
+      result 
+    });
+  } catch (error) {
+    console.error('Error increasing booking count:', error);
+    res.status(500).send({ error: 'Failed to increase booking count' });
+  }
+});
+
 // Contact form submission endpoint
 app.post('/api/contact', async (req, res) => {
     try {
@@ -928,18 +963,6 @@ async function run() {
             }
         });
 
-        app.patch('/bookings/:id/increment', async (req, res) => {
-            try {
-                const id = req.params.id;
-                const result = await carsCollection.updateOne(
-                    { _id: new ObjectId(id) },
-                    { $inc: { bookingCount: 1 } }
-                );
-                res.send(result);
-            } catch (error) {
-                res.status(500).send({ error: 'Failed to increase booking count' });
-            }
-        });
     } finally {
         // MongoDB client will stay connected while the server is running
     }
