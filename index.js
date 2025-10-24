@@ -77,39 +77,117 @@ const verifyAdmin = async (req, res, next) => {
     }
 };
 
-// 🔥 FIXED: Increment booking count endpoint
+// 🔥 FIXED: Get bookings by car owner (for car owners to see bookings for their cars)
+app.get('/bookings/owner', verifyFireBaseToken, async (req, res) => {
+    try {
+        const email = req.query.email;
+        
+        if (!email) {
+            return res.status(400).send({ message: 'Email parameter is required' });
+        }
+
+        if (email !== req.decoded.email) {
+            return res.status(403).send({ message: 'Forbidden Access' });
+        }
+
+        const database = client.db("rentizoDB");
+        const bookingsCollection = database.collection("bookings");
+        const carsCollection = database.collection("cars");
+
+        // First, get all cars owned by this user
+        const ownerCars = await carsCollection.find({
+            'addedBy.email': email
+        }).project({ _id: 1 }).toArray();
+
+        const ownerCarIds = ownerCars.map(car => car._id);
+
+        if (ownerCarIds.length === 0) {
+            return res.send([]);
+        }
+
+        // Then get all bookings for these cars
+        const bookings = await bookingsCollection.aggregate([
+            {
+                $match: {
+                    carId: { $in: ownerCarIds.map(id => id.toString()) }
+                }
+            },
+            {
+                $lookup: {
+                    from: "cars",
+                    localField: "carId",
+                    foreignField: "_id",
+                    as: "carDetails"
+                }
+            },
+            {
+                $unwind: {
+                    path: "$carDetails",
+                    preserveNullAndEmptyArrays: true
+                }
+            },
+            {
+                $project: {
+                    _id: 1,
+                    carId: 1,
+                    carModel: "$carDetails.carModel",
+                    carImage: "$carDetails.image",
+                    userName: 1,
+                    userEmail: 1,
+                    startDate: 1,
+                    endDate: 1,
+                    totalPrice: 1,
+                    pricePerDay: 1,
+                    status: 1,
+                    createdAt: 1,
+                    updatedAt: 1
+                }
+            },
+            {
+                $sort: { createdAt: -1 }
+            }
+        ]).toArray();
+
+        res.send(bookings);
+    } catch (error) {
+        console.error('Error fetching owner bookings:', error);
+        res.status(500).send({ message: 'Failed to fetch bookings', error: error.message });
+    }
+});
+
+// Increment booking count endpoint
 app.patch('/cars/:id/increment', async (req, res) => {
-  try {
-    const id = req.params.id;
-    
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({ error: 'Invalid car ID format' });
+    try {
+        const id = req.params.id;
+
+        if (!ObjectId.isValid(id)) {
+            return res.status(400).send({ error: 'Invalid car ID format' });
+        }
+
+        const database = client.db("rentizoDB");
+        const carsCollection = database.collection("cars");
+
+        const result = await carsCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+                $inc: { bookingCount: 1 },
+                $set: { updatedAt: new Date() }
+            }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).send({ error: 'Car not found' });
+        }
+
+        res.send({
+            success: true,
+            message: 'Booking count incremented successfully',
+            result
+        });
+    } catch (error) {
+        console.error('Error increasing booking count:', error);
+        res.status(500).send({ error: 'Failed to increase booking count' });
     }
-
-    const database = client.db("rentizoDB");
-    const carsCollection = database.collection("cars");
-
-    const result = await carsCollection.updateOne(
-      { _id: new ObjectId(id) },
-      { 
-        $inc: { bookingCount: 1 },
-        $set: { updatedAt: new Date() }
-      }
-    );
-
-    if (result.matchedCount === 0) {
-      return res.status(404).send({ error: 'Car not found' });
-    }
-
-    res.send({ 
-      success: true, 
-      message: 'Booking count incremented successfully',
-      result 
-    });
-  } catch (error) {
-    console.error('Error increasing booking count:', error);
-    res.status(500).send({ error: 'Failed to increase booking count' });
-  }
 });
 
 // Contact form submission endpoint
@@ -244,7 +322,6 @@ app.patch('/admin/users/:id/role', verifyFireBaseToken, verifyAdmin, async (req,
         res.status(500).send({ message: 'Failed to update user role', error: error.message });
     }
 });
-
 
 // Get admin dashboard statistics
 app.get('/admin/stats', verifyFireBaseToken, verifyAdmin, async (req, res) => {
@@ -385,6 +462,7 @@ app.delete('/admin/users/:id', verifyFireBaseToken, verifyAdmin, async (req, res
         res.status(500).send({ message: 'Failed to delete user', error: error.message });
     }
 });
+
 // Get comprehensive analytics data
 app.get('/admin/analytics', verifyFireBaseToken, verifyAdmin, async (req, res) => {
     try {
